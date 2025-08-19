@@ -18,7 +18,7 @@ class AEyeModel(nn.Module):
         self.stage7 = ModifiedMobileViT(dims[3], embed_dim)
         self.pool = nn.AdaptiveAvgPool2d((1, 1))
         self.fc = nn.Linear(dims[3], 1)
-    def forward(self, x_img, return_tokens=False):
+    def forward(self, x_img):
         tokens = self.tokenizer(x_img)
         x = self.stage1(x_img)
         x = self.stage2(x)
@@ -28,8 +28,4 @@ class AEyeModel(nn.Module):
         x = self.stage6(x)
         x = self.stage7(x, tokens)
         x = self.pool(x).view(x.size(0), -1)
-        output = self.fc(x)
-
-        if return_tokens:
-            return output, tokens
-        return output
+        return self.fc(x)
