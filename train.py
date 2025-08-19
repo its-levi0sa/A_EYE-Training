@@ -74,7 +74,25 @@ def train_model(config):
     # --- Model, Optimizer, Loss ---
     model = AEyeModel(config).to(device)
     optimizer = optim.AdamW(model.parameters(), lr=config['learning_rate'], weight_decay=0.01)
-    criterion = nn.BCEWithLogitsLoss()
+
+    # Calculate the weight to handle the imbalanced dataset.
+    num_mature = len(glob.glob(os.path.join('data/train', 'mature', '*')))
+    num_immature = len(glob.glob(os.path.join('data/train', 'immature', '*')))
+
+    # The weight is the ratio of the majority class to the minority class.
+    if num_immature > 0:
+        weight = num_mature / num_immature
+    else:
+        weight = 1.0
+
+    # 'immature' is label 0 and 'mature' is label 1.
+    # Applying the weight to the 'mature' class.
+    pos_weight = torch.tensor([weight], device=device)
+    logging.info(f"Using a weighted loss. Weight for 'mature' class: {weight:.2f}")
+
+    # Pass the calculated weight to the loss function.
+    criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
+
     scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=config['epochs'])
 
     logging.info("Model, optimizer, and loss function initialized.")
