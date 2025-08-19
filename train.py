@@ -8,6 +8,8 @@ import os
 import argparse
 import logging
 from tqdm import tqdm
+import glob
+import random
 
 # Import custom modules
 from model.aeye_model import AEyeModel
@@ -20,11 +22,41 @@ def train_model(config):
     logging.info(f"Using device: {device}")
 
     # --- Data Loading ---
-    # IMPORTANT: Replace these dummy paths with the actual file paths.
-    train_paths = [f"data/train/img_{i}.png" for i in range(800)]
-    train_labels = [0, 1] * 400
-    val_paths = [f"data/val/img_{i}.png" for i in range(200)]
-    val_labels = [0, 1] * 100
+    # 1. Define the paths to data directories
+    train_dir = 'data/train'
+    val_dir = 'data/val'
+
+    # 2. Define classes and assign integer labels
+    class_map = {
+        'immature': 0,
+        'mature': 1
+    }
+
+    # 3. Create a function to scan directories and get file paths with labels
+    def get_paths_and_labels(data_dir, class_mapping):
+        all_paths = []
+        all_labels = []
+        # Find all image files (jpg, jpeg, png) in the subdirectories
+        for class_name, label in class_mapping.items():
+            class_path = os.path.join(data_dir, class_name)
+            image_paths = glob.glob(os.path.join(class_path, '*.[jp][pn]g'))
+            all_paths.extend(image_paths)
+            all_labels.extend([label] * len(image_paths))
+            
+        return all_paths, all_labels
+
+    # Get the training and validation data by calling the function
+    train_paths, train_labels = get_paths_and_labels(train_dir, class_map)
+    val_paths, val_labels = get_paths_and_labels(val_dir, class_map)
+
+    # 4. Shuffle the training data to ensure randomness
+    temp_train_data = list(zip(train_paths, train_labels))
+    random.shuffle(temp_train_data)
+    train_paths, train_labels = zip(*temp_train_data)
+
+    # 5. Print a summary to confirm that the data was loaded correctly
+    logging.info(f"Found {len(train_paths)} images for training.")
+    logging.info(f"Found {len(val_paths)} images for validation.")
 
     data_transforms = T.Compose([
         T.Resize((128, 128)),
