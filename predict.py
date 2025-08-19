@@ -9,32 +9,42 @@ from model.aeye_model import AEyeModel
 
 def generate_explanation(tokens):
     """
-    Converts the raw token tensor into a human-readable explanation.
-    This is where you can define what "high coverage" or "high opacity" means
-    based on the statistical features.
+    Converts the raw token tensor into a more accurate, human-readable explanation.
+    This uses heuristics to better estimate opacity and coverage.
     """
     # Tokens shape: [1, 4, 9] -> [4, 9]
     tokens = tokens.squeeze(0).cpu().numpy()
     
-    # The 9 features are [mean_r, mean_g, mean_b, std_r, std_g, std_b, med_r, med_g, med_b]
-    # High standard deviation (std) in color indicate opacity (less uniform color).
-    # High mean brightness (mean of RGB) indicate a dense, white cataract (coverage).
     explanation = "Explainability Report (Based on Radial Token Analysis):\n"
     explanation += "------------------------------------------------------\n"
     
     ring_names = ["Innermost Ring (Core)", "Inner Ring", "Outer Ring", "Outermost Ring (Periphery)"]
     
-    # Calculate overall metrics from tokens
-    # Average brightness across all rings (proxy for coverage)
-    avg_brightness = np.mean(tokens[:, 0:3]) 
-    # Average color variation across all rings (proxy for opacity)
-    avg_variation = np.mean(tokens[:, 3:6])
+    # --- Start of Heuristics ---
     
-    # Convert these to a rough percentage
-    # These are heuristics and should be described as such.
-    # Max possible brightness/variation is 255.
-    coverage_proxy = min(100, (avg_brightness / 150) * 100)
-    opacity_proxy = min(100, (avg_variation / 50) * 100)
+    # 1. Calculate base metrics from the tokens
+    avg_brightness = np.mean(tokens[:, 0:3]) 
+    avg_variation = np.mean(tokens[:, 3:6])
+    core_brightness = np.mean(tokens[0, 0:3]) # Brightness of the centermost ring
+
+    # 2. Estimate Pupillary Coverage
+    # This formula is now scaled based on a higher expected brightness for full coverage.
+    coverage_proxy = min(100, (avg_brightness / 160.0) * 100)
+
+    # 3. Estimate Opacity with a special rule for dense cataracts
+    # Start with the opacity based on color variation
+    variation_based_opacity = (avg_variation / 50.0) * 100
+    
+    # If the core of the cataract is extremely bright and dense,
+    # it implies high opacity, even if the color is uniform (low variation).
+    brightness_bonus = 0
+    if core_brightness > 190: # Threshold for a very dense core
+        # Add up to a 40% bonus to the opacity score based on how bright the core is.
+        brightness_bonus = ((core_brightness - 190) / (255 - 190)) * 40
+        
+    opacity_proxy = min(100, variation_based_opacity + brightness_bonus)
+
+    # --- End of Heuristics ---
 
     explanation += f"Estimated Pupillary Coverage (Proxy): {coverage_proxy:.1f}%\n"
     explanation += f"Estimated Opacity (Proxy): {opacity_proxy:.1f}%\n\n"
@@ -58,12 +68,21 @@ def predict(config):
 
     # --- 1. Load Model ---
     model = AEyeModel(config['model_config'])
-    model.load_state_dict(torch.load(config['model_path'], map_location=device))
+    try:
+        model.load_state_dict(torch.load(config['model_path'], map_location=device))
+    except FileNotFoundError:
+        print(f"ERROR: Model file not found at {config['model_path']}")
+        return
+        
     model.to(device)
     model.eval()
 
     # --- 2. Load and Preprocess Image ---
-    image = Image.open(config['image_path']).convert("RGB")
+    try:
+        image = Image.open(config['image_path']).convert("RGB")
+    except FileNotFoundError:
+        print(f"ERROR: Image file not found at {config['image_path']}")
+        return
     
     data_transforms = T.Compose([
         T.Resize((128, 128)),
@@ -75,7 +94,7 @@ def predict(config):
 
     # --- 3. Make Prediction and Get Tokens ---
     with torch.no_grad():
-        output, tokens = model(input_tensor, return_tokens=True)
+        output, tokens = model(input_tensor, return_tokens=True) 
         
     # --- 4. Process Output ---
     probability = torch.sigmoid(output).item()
