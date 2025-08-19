@@ -9,54 +9,52 @@ from model.aeye_model import AEyeModel
 
 def generate_explanation(tokens):
     """
-    Converts the raw token tensor into a more accurate, human-readable explanation.
-    This uses heuristics to better estimate opacity and coverage.
+    Converts the raw token tensor into a human-readable explanation.
+    This version is updated to dynamically handle 16 rings.
     """
-    # Tokens shape: [1, 4, 9] -> [4, 9]
+    # Tokens shape: [1, 16, 9] -> [16, 9]
     tokens = tokens.squeeze(0).cpu().numpy()
+    num_rings = tokens.shape[0]
     
     explanation = "Explainability Report (Based on Radial Token Analysis):\n"
     explanation += "------------------------------------------------------\n"
     
-    ring_names = ["Innermost Ring (Core)", "Inner Ring", "Outer Ring", "Outermost Ring (Periphery)"]
-    
-    # --- Start of Heuristics ---
-    
-    # 1. Calculate base metrics from the tokens
+    # --- Heuristics ---
     avg_brightness = np.mean(tokens[:, 0:3]) 
     avg_variation = np.mean(tokens[:, 3:6])
-    core_brightness = np.mean(tokens[0, 0:3]) # Brightness of the centermost ring
+    core_ring_count = num_rings // 4
+    core_brightness = np.mean(tokens[0:core_ring_count, 0:3])
 
-    # 2. Estimate Pupillary Coverage
-    # This formula is now scaled based on a higher expected brightness for full coverage.
     coverage_proxy = min(100, (avg_brightness / 160.0) * 100)
-
-    # 3. Estimate Opacity with a special rule for dense cataracts
-    # Start with the opacity based on color variation
     variation_based_opacity = (avg_variation / 50.0) * 100
     
-    # If the core of the cataract is extremely bright and dense,
-    # it implies high opacity, even if the color is uniform (low variation).
     brightness_bonus = 0
-    if core_brightness > 190: # Threshold for a very dense core
-        # Add up to a 40% bonus to the opacity score based on how bright the core is.
+    if core_brightness > 190:
         brightness_bonus = ((core_brightness - 190) / (255 - 190)) * 40
         
     opacity_proxy = min(100, variation_based_opacity + brightness_bonus)
 
-    # --- End of Heuristics ---
-
     explanation += f"Estimated Pupillary Coverage (Proxy): {coverage_proxy:.1f}%\n"
     explanation += f"Estimated Opacity (Proxy): {opacity_proxy:.1f}%\n\n"
-    explanation += "Ring-by-Ring Analysis:\n"
+    
+    # --- Updated Ring-by-Ring Analysis for 16 Rings ---
+    explanation += "Ring Zone Analysis:\n"
+    
+    # Define the four main zones
+    zone_names = ["Core Zone (Rings 1-4)", "Inner Zone (Rings 5-8)", "Outer Zone (Rings 9-12)", "Peripheral Zone (Rings 13-16)"]
+    rings_per_zone = num_rings // 4
 
-    for i, ring_name in enumerate(ring_names):
-        ring_data = tokens[i]
-        mean_brightness = ring_data[0:3].mean()
-        std_dev = ring_data[3:6].mean()
-        explanation += f"  - {ring_name}:\n"
-        explanation += f"    - Avg. Brightness: {mean_brightness:.2f} (A high value suggests dense cataract)\n"
-        explanation += f"    - Color Variation (Std Dev): {std_dev:.2f} (A high value suggests non-uniform opacity)\n"
+    for i, zone_name in enumerate(zone_names):
+        start_index = i * rings_per_zone
+        end_index = start_index + rings_per_zone
+        zone_tokens = tokens[start_index:end_index]
+        
+        mean_brightness = zone_tokens[:, 0:3].mean()
+        std_dev = zone_tokens[:, 3:6].mean()
+        
+        explanation += f"  - {zone_name}:\n"
+        explanation += f"    - Avg. Brightness: {mean_brightness:.2f}\n"
+        explanation += f"    - Avg. Color Variation: {std_dev:.2f}\n"
         
     explanation += "------------------------------------------------------\n"
     return explanation

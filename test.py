@@ -4,7 +4,7 @@ import torchvision.transforms as T
 import logging
 import glob
 
-# Import your custom modules
+# Import primary modules
 from model.aeye_model import AEyeModel
 from data.dataset import CataractDataset
 
