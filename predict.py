@@ -19,7 +19,6 @@ def generate_explanation(tokens):
     # The 9 features are [mean_r, mean_g, mean_b, std_r, std_g, std_b, med_r, med_g, med_b]
     # High standard deviation (std) in color indicate opacity (less uniform color).
     # High mean brightness (mean of RGB) indicate a dense, white cataract (coverage).
-    
     explanation = "Explainability Report (Based on Radial Token Analysis):\n"
     explanation += "------------------------------------------------------\n"
     
@@ -61,7 +60,7 @@ def predict(config):
     model = AEyeModel(config['model_config'])
     model.load_state_dict(torch.load(config['model_path'], map_location=device))
     model.to(device)
-    model.eval() # Set model to evaluation mode
+    model.eval()
 
     # --- 2. Load and Preprocess Image ---
     image = Image.open(config['image_path']).convert("RGB")
