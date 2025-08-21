@@ -2,8 +2,7 @@ import torch
 import torch.nn as nn
 
 class RadialPositionEmbedding(nn.Module):
-    # def __init__(self, num_rings: int = 16, embed_dim: int = 192):
-    def __init__(self, num_rings: int = 8, embed_dim: int = 192):
+    def __init__(self, num_rings: int = 16, embed_dim: int = 192):
         super().__init__()
         self.num_rings = num_rings
         self.embed_dim = embed_dim
