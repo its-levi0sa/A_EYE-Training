@@ -18,7 +18,6 @@ class ModifiedMobileViT(nn.Module):
         )
         self.proj_in = nn.Conv2d(in_channels, embed_dim, kernel_size=1)
         self.token_proj = nn.Linear(9, embed_dim)
-        # self.pos_encoder = RadialPositionEmbedding(num_rings=16, embed_dim=embed_dim)
         self.pos_encoder = RadialPositionEmbedding(num_rings=8, embed_dim=embed_dim)
         self.transformer = TransformerBlock(embed_dim, num_heads)
         self.proj_out = nn.Conv2d(embed_dim, in_channels, kernel_size=1)
