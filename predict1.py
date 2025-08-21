@@ -131,7 +131,7 @@ def predict(config):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Run 8-Ring A-EYE model for prediction and explanation.")
     parser.add_argument('--image_path', type=str, required=True, help='Path to the input image file.')
-    parser.add_argument('--model_path', type=str, default='saved_models/aeye_best_model_8_rings.pth', help='Path to the trained .pth model file for the 8-ring model.')
+    parser.add_argument('--model_path', type=str, default='saved_models/aeye_best_model.pth', help='Path to the trained .pth model file for the 8-ring model.')
     args = parser.parse_args()
 
     # --- Model Configuration ---
