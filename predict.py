@@ -13,7 +13,7 @@ from model.aeye_model import AEyeModel
 def get_transforms():
     """
     Defines the transformations for a single prediction image.
-    MUST match the validation transforms from your training script.
+    MUST match the validation transforms from the training script.
     """
     return A.Compose([
         A.Resize(256, 256),
@@ -89,7 +89,7 @@ def predict(config):
 
     # --- 4. Make Prediction ---
     with torch.no_grad():
-        # Ensure your model's forward pass can return tokens
+        # Ensure model's forward pass can return tokens
         if 'return_tokens' in AEyeModel.forward.__code__.co_varnames:
              output, tokens = model(input_tensor, return_tokens=True)
         else:
