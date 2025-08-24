@@ -13,7 +13,7 @@ from model.aeye_model import AEyeModel
 def get_transforms():
     """
     Defines the transformations for a single prediction image.
-    MUST match the validation transforms from your training script.
+    MUST match the validation transforms from the training script.
     """
     return A.Compose([
         A.Resize(256, 256),
