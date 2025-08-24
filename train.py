@@ -12,6 +12,7 @@ import random
 import cv2
 import albumentations as A
 from albumentations.pytorch import ToTensorV2
+import numpy as np
 
 # Import the primary model
 from model.aeye_model import AEyeModel
@@ -110,7 +111,17 @@ def train_model(config):
     logging.info(f"Using weighted loss. Weight for 'mature' class: {weight:.2f}")
     criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
 
-    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=config['epochs'])
+    # --- New Scheduler with Warmup ---
+    warmup_epochs = 10
+    num_epochs = config['epochs']
+
+    def lr_lambda(current_epoch):
+        if current_epoch < warmup_epochs:
+            return float(current_epoch) / float(max(1, warmup_epochs))
+        progress = float(current_epoch - warmup_epochs) / float(max(1, num_epochs - warmup_epochs))
+        return 0.5 * (1.0 + np.cos(np.pi * progress))
+
+    scheduler = optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
 
     logging.info("Model, optimizer, and loss function initialized.")
     logging.info(f"Model Configuration: {config}")
