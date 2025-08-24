@@ -9,8 +9,8 @@ class RadialTokenizer(nn.Module):
     """
     def __init__(self):
         super().__init__()
-        self.center = (64, 64)
-        self.rings = [(i * 8, (i + 1) * 8) for i in range(8)]
+        self.center = (128, 128)
+        self.rings = [(i * 16, (i + 1) * 16) for i in range(8)]
 
     def _create_ring_mask(self, shape, center, inner_r, outer_r):
         mask = np.zeros(shape[:2], dtype=np.uint8)
