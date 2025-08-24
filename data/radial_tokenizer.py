@@ -45,5 +45,5 @@ class RadialTokenizer(nn.Module):
                 ring_features.append(ring_feat)
             tokens_9d_list.append(ring_features)
 
-        tokens_9d = torch.tensor(tokens_9d_list, dtype=torch.float32, device=device)
+        tokens_9d = torch.from_numpy(np.array(tokens_9d_list)).to(device=device, dtype=torch.float32)
         return tokens_9d
