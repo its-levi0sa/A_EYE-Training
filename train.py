@@ -188,7 +188,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Train A-EYE Cataract Classification Model")
     parser.add_argument('--epochs', type=int, default=100, help='Number of training epochs')
     parser.add_argument('--batch_size', type=int, default=32, help='Batch size for training')
-    parser.add_argument('--learning_rate', type=float, default=5e-5, help='Max learning rate for OneCycleLR')
+    parser.add_argument('--learning_rate', type=float, default=1e-4, help='Max learning rate for OneCycleLR')
     parser.add_argument('--weight_decay', type=float, default=1e-2, help='Weight decay for AdamW')
     parser.add_argument('--save_dir', type=str, default='saved_models', help='Directory to save models')
     args = parser.parse_args()
