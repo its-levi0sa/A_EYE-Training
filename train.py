@@ -20,18 +20,17 @@ from model.aeye_model import AEyeModel
 
 # --- 1. ENHANCED AUGMENTATIONS ---
 # Added CLAHE and CoarseDropout
+# In train.py
 def get_transforms(is_train=True):
     if is_train:
         return A.Compose([
             A.Resize(256, 256),
-            A.CLAHE(clip_limit=4.0, tile_grid_size=(8, 8), always_apply=True),
+            A.CLAHE(clip_limit=4.0, tile_grid_size=(8, 8), p=1.0),
             A.HorizontalFlip(p=0.5),
             A.RandomBrightnessContrast(brightness_limit=0.2, contrast_limit=0.2, p=0.75),
             A.ShiftScaleRotate(shift_limit=0.1, scale_limit=0.1, rotate_limit=25, p=0.75),
             A.Blur(blur_limit=3, p=0.2),
-            A.CoarseDropout(max_holes=8, max_height=32, max_width=32,
-                              min_holes=1, min_height=8, min_width=8,
-                              fill_value=0, p=0.5),
+            A.Cutout(num_holes=8, max_h_size=32, max_w_size=32, fill_value=0, p=0.5),
             A.Normalize(mean=(0.5, 0.5, 0.5), std=(0.5, 0.5, 0.5)),
             ToTensorV2(),
         ])
@@ -39,7 +38,7 @@ def get_transforms(is_train=True):
         # Apply CLAHE to the validation set
         return A.Compose([
             A.Resize(256, 256),
-            A.CLAHE(clip_limit=4.0, tile_grid_size=(8, 8), always_apply=True),
+            A.CLAHE(clip_limit=4.0, tile_grid_size=(8, 8), p=1.0),
             A.Normalize(mean=(0.5, 0.5, 0.5), std=(0.5, 0.5, 0.5)),
             ToTensorV2(),
         ])
@@ -123,7 +122,7 @@ def train_model(config):
                                                     epochs=config['epochs'])
 
     # --- 5. MIXED PRECISION TRAINING ---
-    scaler = torch.cuda.amp.GradScaler()
+    scaler = torch.amp.GradScaler(device_type='cuda')
 
     logging.info("Model, optimizer, and loss function initialized.")
     logging.info(f"Model Configuration: {config}")
@@ -144,7 +143,7 @@ def train_model(config):
             inputs, labels = inputs.to(device), labels.to(device).unsqueeze(1)
             optimizer.zero_grad()
 
-            with torch.cuda.amp.autocast():
+            with torch.amp.autocast(device_type='cuda'):
                 outputs = model(inputs)
                 loss = criterion(outputs, labels)
 
@@ -160,7 +159,7 @@ def train_model(config):
         with torch.no_grad():
             for inputs, labels in val_loader:
                 inputs, labels = inputs.to(device), labels.to(device)
-                with torch.cuda.amp.autocast():
+                with torch.amp.autocast(device_type='cuda'):
                     outputs = model(inputs)
                 preds = torch.sigmoid(outputs) > 0.5
                 val_preds.extend(preds.cpu().numpy().flatten())

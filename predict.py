@@ -15,8 +15,10 @@ def get_transforms():
     Defines the transformations for a single prediction image.
     MUST match the validation transforms from the training script.
     """
+    # Updated to include CLAHE, matching the validation transform in train.py
     return A.Compose([
         A.Resize(256, 256),
+        A.CLAHE(clip_limit=4.0, tile_grid_size=(8, 8), always_apply=True),
         A.Normalize(mean=(0.5, 0.5, 0.5), std=(0.5, 0.5, 0.5)),
         ToTensorV2(),
     ])
@@ -27,7 +29,7 @@ def generate_explanation(tokens):
     """
     # Expected shape: [1, 4, 9] -> [4, 9]
     tokens = tokens.squeeze(0).cpu().numpy()
-    
+
     explanation = "Explainability Report (4-Ring Model | 256x256)\n"
     explanation += "---------------------------------------------------\n"
 
@@ -62,13 +64,14 @@ def generate_explanation(tokens):
 def predict(config):
     """Loads and runs the 4-ring model for a single prediction."""
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    
+
     # --- 1. Load Model Architecture ---
     model = AEyeModel(config['model_config']).to(device)
-    
+
     # --- 2. Load Trained Weights ---
     try:
         model.load_state_dict(torch.load(config['model_path'], map_location=device))
+        print(f"Model weights loaded successfully from {config['model_path']}")
     except Exception as e:
         print(f"ERROR loading model weights: {e}")
         return
@@ -115,11 +118,12 @@ if __name__ == '__main__':
     parser.add_argument('--model_path', type=str, default='saved_models/aeye_best_model.pth', help='Path to the trained 4-ring .pth model file.')
     args = parser.parse_args()
 
+    # This model_config MUST match the one used for training
     model_config = {
-        'dims': [16, 32, 96, 128],
-        'embed_dim': 192,
+        'dims': [32, 64, 128, 160],
+        'embed_dim': 256,
     }
-    
+
     config = {'model_config': model_config}
     config.update(vars(args))
     predict(config)
