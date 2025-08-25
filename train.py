@@ -15,12 +15,13 @@ from albumentations.pytorch import ToTensorV2
 import numpy as np
 from collections import deque
 
+# --- Suppress FutureWarning ---
+import warnings
+warnings.filterwarnings("ignore", category=FutureWarning)
+
 # Import the primary model
 from model.aeye_model import AEyeModel
 
-# --- 1. ENHANCED AUGMENTATIONS ---
-# Added CLAHE and CoarseDropout
-# In train.py
 def get_transforms(is_train=True):
     if is_train:
         return A.Compose([
@@ -30,12 +31,14 @@ def get_transforms(is_train=True):
             A.RandomBrightnessContrast(brightness_limit=0.2, contrast_limit=0.2, p=0.75),
             A.ShiftScaleRotate(shift_limit=0.1, scale_limit=0.1, rotate_limit=25, p=0.75),
             A.Blur(blur_limit=3, p=0.2),
-            A.Cutout(num_holes=8, max_h_size=32, max_w_size=32, fill_value=0, p=0.5),
+            A.CoarseDropout(max_holes=8, max_height=32, max_width=32,
+                              min_holes=1, min_height=8, min_width=8,
+                              fill_value=0, p=0.5),
             A.Normalize(mean=(0.5, 0.5, 0.5), std=(0.5, 0.5, 0.5)),
             ToTensorV2(),
         ])
     else:
-        # Apply CLAHE to the validation set
+        # Also apply CLAHE to the validation set
         return A.Compose([
             A.Resize(256, 256),
             A.CLAHE(clip_limit=4.0, tile_grid_size=(8, 8), p=1.0),
@@ -115,14 +118,12 @@ def train_model(config):
     logging.info(f"Using weighted loss. Weight for 'mature' class: {weight:.2f}")
     criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
 
-    # --- 2. ADVANCED SCHEDULER: OneCycleLR ---
     scheduler = torch.optim.lr_scheduler.OneCycleLR(optimizer,
                                                     max_lr=config['learning_rate'],
                                                     steps_per_epoch=len(train_loader),
                                                     epochs=config['epochs'])
 
-    # --- 5. MIXED PRECISION TRAINING ---
-    scaler = torch.amp.GradScaler(device_type='cuda')
+    scaler = torch.cuda.amp.GradScaler()
 
     logging.info("Model, optimizer, and loss function initialized.")
     logging.info(f"Model Configuration: {config}")
@@ -130,7 +131,6 @@ def train_model(config):
     best_val_f1 = 0.0
     os.makedirs(config['save_dir'], exist_ok=True)
 
-    # --- 4. EARLY STOPPING SETUP ---
     patience = 10
     epochs_no_improve = 0
     f1_history = deque(maxlen=patience)
@@ -143,7 +143,7 @@ def train_model(config):
             inputs, labels = inputs.to(device), labels.to(device).unsqueeze(1)
             optimizer.zero_grad()
 
-            with torch.amp.autocast(device_type='cuda'):
+            with torch.cuda.amp.autocast():
                 outputs = model(inputs)
                 loss = criterion(outputs, labels)
 
@@ -159,7 +159,7 @@ def train_model(config):
         with torch.no_grad():
             for inputs, labels in val_loader:
                 inputs, labels = inputs.to(device), labels.to(device)
-                with torch.amp.autocast(device_type='cuda'):
+                with torch.cuda.amp.autocast():
                     outputs = model(inputs)
                 preds = torch.sigmoid(outputs) > 0.5
                 val_preds.extend(preds.cpu().numpy().flatten())
@@ -171,7 +171,6 @@ def train_model(config):
         f1 = f1_score(val_labels_all, val_preds, zero_division=0)
         logging.info(f"Validation - Acc: {accuracy:.4f}, P: {precision:.4f}, R: {recall:.4f}, F1: {f1:.4f}")
 
-        # --- Early Stopping Logic ---
         if f1 > best_val_f1:
             best_val_f1 = f1
             epochs_no_improve = 0
