@@ -11,13 +11,16 @@ class AEyeModel(nn.Module):
         self.tokenizer = RadialTokenizer()
         self.stage1 = conv_3x3_bn(3, dims[0], stride=2)
         self.stage2 = MV2Block(dims[0], dims[1], stride=2)
-        self.stage3 = ModifiedMobileViT(dims[1], embed_dim)
+        self.stage3 = ModifiedMobileViT(in_channels=dims[1], embed_dim=embed_dim)
         self.stage4 = MV2Block(dims[1], dims[2], stride=2)
-        self.stage5 = ModifiedMobileViT(dims[2], embed_dim)
+        self.stage5 = ModifiedMobileViT(in_channels=dims[2], embed_dim=embed_dim)
         self.stage6 = MV2Block(dims[2], dims[3], stride=2)
-        self.stage7 = ModifiedMobileViT(dims[3], embed_dim)
+        self.stage7 = ModifiedMobileViT(in_channels=dims[3], embed_dim=embed_dim)
         self.pool = nn.AdaptiveAvgPool2d((1, 1))
+        
+        self.dropout = nn.Dropout(0.2)
         self.fc = nn.Linear(dims[3], 1)
+
     def forward(self, x_img, return_tokens=False):
         tokens = self.tokenizer(x_img)
         x = self.stage1(x_img)
@@ -28,9 +31,10 @@ class AEyeModel(nn.Module):
         x = self.stage6(x)
         x = self.stage7(x, tokens)
         x = self.pool(x).view(x.size(0), -1)
+        x = self.dropout(x)
         output = self.fc(x)
 
         if return_tokens:
             return output, tokens
-            
+
         return output

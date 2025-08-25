@@ -13,25 +13,33 @@ import cv2
 import albumentations as A
 from albumentations.pytorch import ToTensorV2
 import numpy as np
+from collections import deque
 
 # Import the primary model
 from model.aeye_model import AEyeModel
 
-# Uses Albumentations
+# --- 1. ENHANCED AUGMENTATIONS ---
+# Added CLAHE and CoarseDropout
 def get_transforms(is_train=True):
     if is_train:
         return A.Compose([
             A.Resize(256, 256),
+            A.CLAHE(clip_limit=4.0, tile_grid_size=(8, 8), always_apply=True),
             A.HorizontalFlip(p=0.5),
             A.RandomBrightnessContrast(brightness_limit=0.2, contrast_limit=0.2, p=0.75),
             A.ShiftScaleRotate(shift_limit=0.1, scale_limit=0.1, rotate_limit=25, p=0.75),
             A.Blur(blur_limit=3, p=0.2),
+            A.CoarseDropout(max_holes=8, max_height=32, max_width=32,
+                              min_holes=1, min_height=8, min_width=8,
+                              fill_value=0, p=0.5),
             A.Normalize(mean=(0.5, 0.5, 0.5), std=(0.5, 0.5, 0.5)),
             ToTensorV2(),
         ])
     else:
+        # Apply CLAHE to the validation set
         return A.Compose([
             A.Resize(256, 256),
+            A.CLAHE(clip_limit=4.0, tile_grid_size=(8, 8), always_apply=True),
             A.Normalize(mean=(0.5, 0.5, 0.5), std=(0.5, 0.5, 0.5)),
             ToTensorV2(),
         ])
@@ -48,10 +56,8 @@ class AlbumentationsDataset(Dataset):
 
     def __getitem__(self, idx):
         image_path = self.image_paths[idx]
-        # Read image with OpenCV for Albumentations
         image = cv2.imread(image_path)
         image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-        
         label = torch.tensor(self.labels[idx], dtype=torch.float32)
 
         if self.transform:
@@ -89,7 +95,6 @@ def train_model(config):
 
     logging.info(f"Found {len(train_paths)} images for training and {len(val_paths)} for validation.")
 
-    # Use the Albumentations-based dataset and transforms
     train_dataset = AlbumentationsDataset(train_paths, train_labels, transform=get_transforms(is_train=True))
     val_dataset = AlbumentationsDataset(val_paths, val_labels, transform=get_transforms(is_train=False))
 
@@ -99,9 +104,9 @@ def train_model(config):
 
     # --- Model, Optimizer, Loss ---
     model = AEyeModel(config['model_config']).to(device)
-    optimizer = optim.AdamW(model.parameters(), lr=config['learning_rate'], weight_decay=0.01)
-    
-    # --- Standardized Weighted Loss Calculation ---
+    optimizer = optim.AdamW(model.parameters(), lr=config['learning_rate'], weight_decay=config['weight_decay'])
+
+    # --- Weighted Loss Calculation ---
     num_mature = len(glob.glob(os.path.join(train_dir, 'mature', '*')))
     num_immature = len(glob.glob(os.path.join(train_dir, 'immature', '*')))
     weight = 1.0
@@ -111,23 +116,25 @@ def train_model(config):
     logging.info(f"Using weighted loss. Weight for 'mature' class: {weight:.2f}")
     criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
 
-    # --- New Scheduler with Warmup ---
-    warmup_epochs = 10
-    num_epochs = config['epochs']
+    # --- 2. ADVANCED SCHEDULER: OneCycleLR ---
+    scheduler = torch.optim.lr_scheduler.OneCycleLR(optimizer,
+                                                    max_lr=config['learning_rate'],
+                                                    steps_per_epoch=len(train_loader),
+                                                    epochs=config['epochs'])
 
-    def lr_lambda(current_epoch):
-        if current_epoch < warmup_epochs:
-            return float(current_epoch) / float(max(1, warmup_epochs))
-        progress = float(current_epoch - warmup_epochs) / float(max(1, num_epochs - warmup_epochs))
-        return 0.5 * (1.0 + np.cos(np.pi * progress))
-
-    scheduler = optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
+    # --- 5. MIXED PRECISION TRAINING ---
+    scaler = torch.cuda.amp.GradScaler()
 
     logging.info("Model, optimizer, and loss function initialized.")
     logging.info(f"Model Configuration: {config}")
 
     best_val_f1 = 0.0
     os.makedirs(config['save_dir'], exist_ok=True)
+
+    # --- 4. EARLY STOPPING SETUP ---
+    patience = 10
+    epochs_no_improve = 0
+    f1_history = deque(maxlen=patience)
 
     # --- Training & Validation Loops ---
     for epoch in range(config['epochs']):
@@ -136,19 +143,25 @@ def train_model(config):
         for inputs, labels in train_loop:
             inputs, labels = inputs.to(device), labels.to(device).unsqueeze(1)
             optimizer.zero_grad()
-            outputs = model(inputs)
-            loss = criterion(outputs, labels)
-            loss.backward()
-            optimizer.step()
+
+            with torch.cuda.amp.autocast():
+                outputs = model(inputs)
+                loss = criterion(outputs, labels)
+
+            scaler.scale(loss).backward()
+            scaler.step(optimizer)
+            scaler.update()
+
+            scheduler.step()
             train_loop.set_postfix(loss=loss.item())
-        scheduler.step()
 
         model.eval()
         val_preds, val_labels_all = [], []
         with torch.no_grad():
             for inputs, labels in val_loader:
                 inputs, labels = inputs.to(device), labels.to(device)
-                outputs = model(inputs)
+                with torch.cuda.amp.autocast():
+                    outputs = model(inputs)
                 preds = torch.sigmoid(outputs) > 0.5
                 val_preds.extend(preds.cpu().numpy().flatten())
                 val_labels_all.extend(labels.cpu().numpy().flatten())
@@ -159,26 +172,36 @@ def train_model(config):
         f1 = f1_score(val_labels_all, val_preds, zero_division=0)
         logging.info(f"Validation - Acc: {accuracy:.4f}, P: {precision:.4f}, R: {recall:.4f}, F1: {f1:.4f}")
 
+        # --- Early Stopping Logic ---
         if f1 > best_val_f1:
             best_val_f1 = f1
+            epochs_no_improve = 0
             model_path = os.path.join(config['save_dir'], 'aeye_best_model.pth')
             torch.save(model.state_dict(), model_path)
             logging.info(f"New best model saved to {model_path} with F1-Score: {f1:.4f}")
+        else:
+            epochs_no_improve += 1
+
+        f1_history.append(f1)
+
+        if epochs_no_improve >= patience:
+            logging.info(f"Early stopping triggered after {patience} epochs with no improvement.")
+            break
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Train A-EYE Cataract Classification Model")
     parser.add_argument('--epochs', type=int, default=100, help='Number of training epochs')
     parser.add_argument('--batch_size', type=int, default=32, help='Batch size for training')
-    parser.add_argument('--learning_rate', type=float, default=1e-4, help='Optimizer learning rate')
+    parser.add_argument('--learning_rate', type=float, default=3e-4, help='Max learning rate for OneCycleLR')
+    parser.add_argument('--weight_decay', type=float, default=1e-2, help='Weight decay for AdamW')
     parser.add_argument('--save_dir', type=str, default='saved_models', help='Directory to save models')
     args = parser.parse_args()
 
-    # Model configuration
     model_config = {
-        'dims': [16, 32, 96, 128],
-        'embed_dim': 192,
+        'dims': [32, 64, 128, 160],
+        'embed_dim': 256,
     }
-    
+
     config = {'model_config': model_config}
     config.update(vars(args))
 
