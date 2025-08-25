@@ -9,7 +9,7 @@ class ModifiedMobileViT(nn.Module):
     """
     Custom MobileViT-style block.
     """
-    def __init__(self, in_channels=32, embed_dim=192, num_heads=2):
+    def __init__(self, in_channels, embed_dim, num_rings, num_heads=2): # Added num_rings
         super().__init__()
         self.local_conv = nn.Sequential(
             nn.Conv2d(in_channels, in_channels, kernel_size=3, padding=1, bias=False),
@@ -18,7 +18,7 @@ class ModifiedMobileViT(nn.Module):
         )
         self.proj_in = nn.Conv2d(in_channels, embed_dim, kernel_size=1)
         self.token_proj = nn.Linear(9, embed_dim)
-        self.pos_encoder = RadialPositionEmbedding(num_rings=4, embed_dim=embed_dim)
+        self.pos_encoder = RadialPositionEmbedding(num_rings=num_rings, embed_dim=embed_dim)
         self.transformer = TransformerBlock(embed_dim, num_heads)
         self.proj_out = nn.Conv2d(embed_dim, in_channels, kernel_size=1)
         self.fuse = nn.Sequential(
