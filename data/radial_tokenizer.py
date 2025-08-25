@@ -10,7 +10,7 @@ class RadialTokenizer(nn.Module):
     def __init__(self):
         super().__init__()
         self.center = (128, 128)
-        self.rings = np.array([(i * 32, (i + 1) * 32) for i in range(4)])
+        self.rings = [(i * 32, (i + 1) * 32) for i in range(4)]
 
     def _create_ring_mask(self, shape, center, inner_r, outer_r):
         mask = np.zeros(shape[:2], dtype=np.uint8)
