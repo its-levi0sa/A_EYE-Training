@@ -175,8 +175,8 @@ if __name__ == '__main__':
 
     # Model configuration
     model_config = {
-        'dims': [32, 64, 128, 160],
-        'embed_dim': 256,
+        'dims': [16, 32, 96, 128],
+        'embed_dim': 192,
     }
     
     config = {'model_config': model_config}
