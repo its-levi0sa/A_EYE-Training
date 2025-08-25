@@ -4,7 +4,8 @@ import torch
 def fold_tokens_to_grid(tokens, output_size):
     B, P, D = tokens.shape
     H, W = output_size
-    return tokens[:, 0].unsqueeze(-1).unsqueeze(-1).expand(B, D, H, W)
+    global_context = tokens.mean(dim=1)
+    return global_context.unsqueeze(-1).unsqueeze(-1).expand(B, D, H, W)
 
 def conv_3x3_bn(inp, oup, stride=1):
     return nn.Sequential(

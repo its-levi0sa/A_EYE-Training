@@ -18,8 +18,13 @@ class AEyeModel(nn.Module):
         self.stage7 = ModifiedMobileViT(in_channels=dims[3], embed_dim=embed_dim)
         self.pool = nn.AdaptiveAvgPool2d((1, 1))
         
-        self.dropout = nn.Dropout(0.2)
-        self.fc = nn.Linear(dims[3], 1)
+        # --- ENHANCEMENT: More Robust Classification Head ---
+        self.fc = nn.Sequential(
+            nn.Linear(dims[3], dims[3] // 2),
+            nn.ReLU(),
+            nn.Dropout(0.2),
+            nn.Linear(dims[3] // 2, 1)
+        )
 
     def forward(self, x_img, return_tokens=False):
         tokens = self.tokenizer(x_img)
@@ -31,7 +36,6 @@ class AEyeModel(nn.Module):
         x = self.stage6(x)
         x = self.stage7(x, tokens)
         x = self.pool(x).view(x.size(0), -1)
-        x = self.dropout(x)
         output = self.fc(x)
 
         if return_tokens:

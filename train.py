@@ -22,6 +22,28 @@ warnings.filterwarnings("ignore", category=FutureWarning)
 # Import the primary model
 from model.aeye_model import AEyeModel
 
+# --- ENHANCEMENT: Focal Loss Implementation ---
+class FocalLoss(nn.Module):
+    def __init__(self, alpha=0.25, gamma=2.0, reduction='mean'):
+        super(FocalLoss, self).__init__()
+        self.alpha = alpha
+        self.gamma = gamma
+        self.reduction = reduction
+        self.bce_loss = nn.BCEWithLogitsLoss(reduction='none')
+
+    def forward(self, inputs, targets):
+        bce_loss = self.bce_loss(inputs, targets)
+        p_t = torch.exp(-bce_loss)
+        alpha_t = self.alpha * targets + (1 - self.alpha) * (1 - targets)
+        focal_loss = alpha_t * (1 - p_t)**self.gamma * bce_loss
+
+        if self.reduction == 'mean':
+            return focal_loss.mean()
+        elif self.reduction == 'sum':
+            return focal_loss.sum()
+        else:
+            return focal_loss
+
 def get_transforms(is_train=True):
     if is_train:
         return A.Compose([
@@ -38,7 +60,6 @@ def get_transforms(is_train=True):
             ToTensorV2(),
         ])
     else:
-        # Also apply CLAHE to the validation set
         return A.Compose([
             A.Resize(256, 256),
             A.CLAHE(clip_limit=4.0, tile_grid_size=(8, 8), p=1.0),
@@ -46,7 +67,7 @@ def get_transforms(is_train=True):
             ToTensorV2(),
         ])
 
-# Modified dataset class for Albumentations
+
 class AlbumentationsDataset(Dataset):
     def __init__(self, image_paths, labels, transform=None):
         self.image_paths = image_paths
@@ -68,8 +89,8 @@ class AlbumentationsDataset(Dataset):
 
         return image, label
 
+
 def train_model(config):
-    """Main function to run the standardized training and evaluation pipeline."""
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logging.info(f"Using device: {device}")
@@ -107,16 +128,11 @@ def train_model(config):
     # --- Model, Optimizer, Loss ---
     model = AEyeModel(config['model_config']).to(device)
     optimizer = optim.AdamW(model.parameters(), lr=config['learning_rate'], weight_decay=config['weight_decay'])
+    
+    # --- Using Focal Loss ---
+    criterion = FocalLoss()
+    logging.info("Using Focal Loss for training.")
 
-    # --- Weighted Loss Calculation ---
-    num_mature = len(glob.glob(os.path.join(train_dir, 'mature', '*')))
-    num_immature = len(glob.glob(os.path.join(train_dir, 'immature', '*')))
-    weight = 1.0
-    if num_immature > 0 and num_mature > 0:
-        weight = num_immature / num_mature
-    pos_weight = torch.tensor([weight], device=device)
-    logging.info(f"Using weighted loss. Weight for 'mature' class: {weight:.2f}")
-    criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
 
     scheduler = torch.optim.lr_scheduler.OneCycleLR(optimizer,
                                                     max_lr=config['learning_rate'],
@@ -148,6 +164,7 @@ def train_model(config):
                 loss = criterion(outputs, labels)
 
             scaler.scale(loss).backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             scaler.step(optimizer)
             scaler.update()
 
@@ -190,7 +207,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Train A-EYE Cataract Classification Model")
     parser.add_argument('--epochs', type=int, default=100, help='Number of training epochs')
     parser.add_argument('--batch_size', type=int, default=32, help='Batch size for training')
-    parser.add_argument('--learning_rate', type=float, default=3e-4, help='Max learning rate for OneCycleLR')
+    parser.add_argument('--learning_rate', type=float, default=1e-4, help='Max learning rate for OneCycleLR')
     parser.add_argument('--weight_decay', type=float, default=1e-2, help='Weight decay for AdamW')
     parser.add_argument('--save_dir', type=str, default='saved_models', help='Directory to save models')
     args = parser.parse_args()
