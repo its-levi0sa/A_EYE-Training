@@ -69,6 +69,7 @@ def predict(config):
     # --- 2. Load Trained Weights ---
     try:
         model.load_state_dict(torch.load(config['model_path'], map_location=device))
+        print(f"Successfully loaded model weights from {config['model_path']}")
     except Exception as e:
         print(f"ERROR loading model weights: {e}")
         return
@@ -89,7 +90,6 @@ def predict(config):
 
     # --- 4. Make Prediction ---
     with torch.no_grad():
-        # Ensure model's forward pass can return tokens
         if 'return_tokens' in AEyeModel.forward.__code__.co_varnames:
              output, tokens = model(input_tensor, return_tokens=True)
         else:
@@ -115,9 +115,10 @@ if __name__ == '__main__':
     parser.add_argument('--model_path', type=str, default='saved_models/aeye_best_model.pth', help='Path to the trained 4-ring .pth model file.')
     args = parser.parse_args()
 
+    # --- CRITICAL CHANGE HERE ---
     model_config = {
-        'dims': [16, 32, 96, 128],
-        'embed_dim': 192,
+        'dims': [32, 64, 128, 160],
+        'embed_dim': 256,
     }
     
     config = {'model_config': model_config}
