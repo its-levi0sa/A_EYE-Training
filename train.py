@@ -127,9 +127,13 @@ def train_one_fold(fold, train_loader, val_loader, config):
         precision = precision_score(val_labels_all, val_preds, zero_division=0)
         recall = recall_score(val_labels_all, val_preds, zero_division=0)
         f1 = f1_score(val_labels_all, val_preds, zero_division=0)
-        
-        logging.info(f"Validation - Acc: {accuracy:.4f}, P: {precision:.4f}, R: {recall:.4f}, F1: {f1:.4f} (Best F1: {best_val_f1:.4f})")
 
+        # CHANGE FOR PRINT OUT IN KAGGLE
+        tqdm.write(
+            f"[Fold {fold+1}, Epoch {epoch+1}/{config['epochs']}] "
+            f"Val Acc: {accuracy:.4f}, P: {precision:.4f}, R: {recall:.4f}, "
+            f"F1: {f1:.4f} (Best F1: {best_val_f1:.4f})"
+        )
         if f1 > best_val_f1:
             best_val_f1 = f1
             epochs_no_improve = 0
