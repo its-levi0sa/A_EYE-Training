@@ -20,24 +20,42 @@ warnings.filterwarnings("ignore")
 
 from model.aeye_model import AEyeModel
 
+# --- Focal Loss Implementation ---
 class FocalLoss(nn.Module):
+    """
+    A more numerically stable implementation of Focal Loss that is less
+    prone to producing NaNs with extreme inputs.
+    """
     def __init__(self, alpha=0.25, gamma=2.0, reduction='mean'):
         super(FocalLoss, self).__init__()
         self.alpha = alpha
         self.gamma = gamma
         self.reduction = reduction
-        self.bce_loss = nn.BCEWithLogitsLoss(reduction='none')
 
     def forward(self, inputs, targets):
-        bce_loss = self.bce_loss(inputs, targets)
-        p_t = torch.exp(-bce_loss)
+        # Use BCEWithLogitsLoss for its internal stability optimizations
+        bce_loss = nn.functional.binary_cross_entropy_with_logits(inputs, targets, reduction='none')
+        
+        # Calculate p_t = P(correct class) using sigmoid on logits
+        p = torch.sigmoid(inputs)
+        p_t = p * targets + (1 - p) * (1 - targets)
+        
         alpha_t = self.alpha * targets + (1 - self.alpha) * (1 - targets)
-        focal_loss = alpha_t * (1 - p_t)**self.gamma * bce_loss
-        if self.reduction == 'mean': return focal_loss.mean()
-        elif self.reduction == 'sum': return focal_loss.sum()
-        else: return focal_loss
+        focal_loss = alpha_t * (1 - p_t).pow(self.gamma) * bce_loss
 
+        if self.reduction == 'mean':
+            return focal_loss.mean()
+        elif self.reduction == 'sum':
+            return focal_loss.sum()
+        else:
+            return focal_loss
+
+# --- Slightly Reduced Augmentation Intensity ---
 def get_transforms(is_train=True):
+    """
+    Defines the data augmentations. The intensity of the geometric distortions
+    has been slightly reduced to prevent extreme cases.
+    """
     if is_train:
         return A.Compose([
             A.Resize(256, 256),
@@ -46,8 +64,8 @@ def get_transforms(is_train=True):
             A.RandomBrightnessContrast(brightness_limit=0.3, contrast_limit=0.3, p=0.75),
             A.ShiftScaleRotate(shift_limit=0.1, scale_limit=0.15, rotate_limit=30, p=0.75),
             A.Blur(blur_limit=3, p=0.2),
-            A.GridDistortion(p=0.2),
-            A.OpticalDistortion(distort_limit=0.2, shift_limit=0.2, p=0.2),
+            A.GridDistortion(p=0.15),
+            A.OpticalDistortion(distort_limit=0.1, shift_limit=0.1, p=0.15),
             A.CoarseDropout(max_holes=8, max_height=32, max_width=32, p=0.5),
             A.Normalize(mean=(0.5, 0.5, 0.5), std=(0.5, 0.5, 0.5)),
             ToTensorV2(),
@@ -101,8 +119,13 @@ def train_one_fold(fold, train_loader, val_loader, config):
             with torch.cuda.amp.autocast():
                 outputs = model(inputs)
                 loss = criterion(outputs, labels)
+
             scaler.scale(loss).backward()
+            
+            # --- CORRECT Gradient Clipping Order ---
+            scaler.unscale_(optimizer)
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            
             scaler.step(optimizer)
             scaler.update()
             scheduler.step()
