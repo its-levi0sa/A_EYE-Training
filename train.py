@@ -20,6 +20,19 @@ warnings.filterwarnings("ignore")
 
 from model.aeye_model import AEyeModel
 
+def seed_everything(seed=42):
+    """
+    Sets the seed for reproducibility.
+    """
+    random.seed(seed)
+    os.environ['PYTHONHASHSEED'] = str(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed) # if you are using multi-GPU.
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
 # --- Focal Loss Implementation ---
 class FocalLoss(nn.Module):
     def __init__(self, alpha=0.25, gamma=2.0, reduction='mean'):
@@ -90,7 +103,7 @@ def train_one_fold(fold, train_loader, val_loader, config):
     best_val_f1 = 0.0
     patience = 15
     epochs_no_improve = 0
-    
+
     logging.info(f"--- Starting Fold {fold+1} ---")
 
     for epoch in range(config['epochs']):
@@ -103,10 +116,10 @@ def train_one_fold(fold, train_loader, val_loader, config):
                 outputs = model(inputs)
                 loss = criterion(outputs, labels)
             scaler.scale(loss).backward()
-            
+
             # --- THE STABILITY FIX: GRADIENT CLIPPING ---
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-            
+
             scaler.step(optimizer)
             scaler.update()
             scheduler.step()
@@ -122,12 +135,12 @@ def train_one_fold(fold, train_loader, val_loader, config):
                 preds = torch.sigmoid(outputs) > 0.5
                 val_preds.extend(preds.cpu().numpy().flatten())
                 val_labels_all.extend(labels.cpu().numpy().flatten())
-        
+
         accuracy = accuracy_score(val_labels_all, val_preds)
         precision = precision_score(val_labels_all, val_preds, zero_division=0)
         recall = recall_score(val_labels_all, val_preds, zero_division=0)
         f1 = f1_score(val_labels_all, val_preds, zero_division=0)
-        
+
         logging.info(f"Validation - Acc: {accuracy:.4f}, P: {precision:.4f}, R: {recall:.4f}, F1: {f1:.4f} (Best F1: {best_val_f1:.4f})")
 
         if f1 > best_val_f1:
@@ -142,11 +155,14 @@ def train_one_fold(fold, train_loader, val_loader, config):
         if epochs_no_improve >= patience:
             logging.info(f"Fold {fold+1}, Epoch {epoch+1}: Early stopping triggered.")
             break
-            
+
     logging.info(f"--- Finished Fold {fold+1}, Final Best F1-Score: {best_val_f1:.4f} ---")
     return best_val_f1
 
 def main(config):
+    # --- ADD SEEDING HERE ---
+    seed_everything(seed=42)
+
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
     data_dir = 'data/train'
     class_map = {'immature': 0, 'mature': 1}
