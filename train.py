@@ -188,8 +188,8 @@ def main(config):
         train_labels, val_labels = labels[train_idx], labels[val_idx]
         train_dataset = AlbumentationsDataset(train_paths, train_labels, transform=get_transforms(is_train=True))
         val_dataset = AlbumentationsDataset(val_paths, val_labels, transform=get_transforms(is_train=False))
-        train_loader = DataLoader(train_dataset, batch_size=config['batch_size'], shuffle=True, num_workers=2)
-        val_loader = DataLoader(val_dataset, batch_size=config['batch_size'], shuffle=False, num_workers=2)
+        train_loader = DataLoader(train_dataset, batch_size=config['batch_size'], shuffle=True, num_workers=0)
+        val_loader = DataLoader(val_dataset, batch_size=config['batch_size'], shuffle=False, num_workers=0)
         fold_f1 = train_one_fold(fold, train_loader, val_loader, config)
         fold_scores.append(fold_f1)
 
