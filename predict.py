@@ -4,39 +4,35 @@ import cv2
 import argparse
 import numpy as np
 import os
+import glob
 import albumentations as A
 from albumentations.pytorch import ToTensorV2
+import logging
+import warnings
+warnings.filterwarnings("ignore")
 
-# Import the primary model
 from model.aeye_model import AEyeModel
 
 def get_transforms():
-    """
-    Defines the transformations for a single prediction image.
-    MUST match the validation transforms from the training script.
-    """
     return A.Compose([
         A.Resize(256, 256),
+        A.CLAHE(clip_limit=4.0, tile_grid_size=(8, 8), p=1.0),
         A.Normalize(mean=(0.5, 0.5, 0.5), std=(0.5, 0.5, 0.5)),
         ToTensorV2(),
     ])
 
 def generate_explanation(tokens):
-    """
-    Generates a human-readable report from the 8 radial tokens.
-    """
-    # Expected shape: [1, 8, 9] -> [8, 9]
+    if tokens is None:
+        return "Explainability report could not be generated."
+        
     tokens = tokens.squeeze(0).cpu().numpy()
-    num_rings = tokens.shape[0]
     
-    explanation = "Explainability Report (8-Ring Model | 256x256)\n"
-    explanation += "---------------------------------------------------\n"
+    explanation = "Explainability Report (Based on 8-Ring Token Analysis):\n"
+    explanation += "------------------------------------------------------\n"
 
-    # --- Heuristic-Based Overall Assessment ---
     avg_brightness = np.mean(tokens[:, 0:3])
     avg_variation = np.mean(tokens[:, 3:6])
-    core_ring_count = num_rings // 4
-    core_brightness = np.mean(tokens[0:core_ring_count, 0:3])
+    core_brightness = np.mean(tokens[0:2, 0:3]) # Avg of first 2 rings for core
 
     coverage_proxy = min(100.0, (avg_brightness / 160.0) * 100)
     variation_based_opacity = (avg_variation / 50.0) * 100
@@ -46,41 +42,50 @@ def generate_explanation(tokens):
     opacity_proxy = min(100.0, variation_based_opacity + brightness_bonus)
 
     explanation += f"Estimated Pupillary Coverage (Proxy): {coverage_proxy:.1f}%\n"
-    explanation += f"Estimated Opacity (Proxy): {opacity_proxy:.1f}%\n\n"
-
-    # --- Detailed Ring Zone Analysis ---
+    explanation += f"Estimated Opacity (Proxy): {opacity_proxy:.1f}%\n"
     explanation += "Ring Zone Analysis:\n"
-    zone_names = ["Core & Inner Zone (Rings 1-4)", "Outer & Peripheral Zone (Rings 5-8)"]
-    rings_per_zone = num_rings // 2
-    for i, zone_name in enumerate(zone_names):
-        start_index = i * rings_per_zone
-        end_index = start_index + rings_per_zone
-        zone_tokens = tokens[start_index:end_index]
+    
+    # Hard-coded for 8 rings, grouped into two zones
+    zone_definitions = {
+        "Core & Inner Zone (Rings 1-4)": (0, 4), 
+        "Outer & Peripheral Zone (Rings 5-8)": (4, 8)
+    }
+
+    for zone_name, (start, end) in zone_definitions.items():
+        zone_tokens = tokens[start:end]
         mean_brightness = zone_tokens[:, 0:3].mean()
         std_dev = zone_tokens[:, 3:6].mean()
         explanation += f"  - {zone_name}:\n"
         explanation += f"    - Avg. Brightness: {mean_brightness:.2f}\n"
-        explanation += f"    - Avg. Color Variation (Texture): {std_dev:.2f}\n"
-    explanation += "---------------------------------------------------\n"
+        explanation += f"    - Avg. Color Variation: {std_dev:.2f}\n"
+        
     return explanation
 
-def predict(config):
-    """Loads and runs the 8-ring model for a single prediction."""
+def predict_with_ensemble(config):
+    # ... (This function is identical to your latest 4-ring version)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
-    # --- 1. Load Model Architecture ---
-    model = AEyeModel(config['model_config']).to(device)
-    
-    # --- 2. Load Trained Weights ---
-    try:
-        model.load_state_dict(torch.load(config['model_path'], map_location=device))
-    except Exception as e:
-        print(f"ERROR loading model weights: {e}")
+    model_paths = glob.glob(os.path.join(config['model_dir'], 'aeye_best_model_fold_*.pth'))
+    if not model_paths:
+        print(f"ERROR: No models found in '{config['model_dir']}'.")
         return
 
-    model.eval()
+    models = []
+    for path in model_paths:
+        model = AEyeModel(config['model_config']).to(device)
+        try:
+            model.load_state_dict(torch.load(path, map_location=device))
+            model.eval()
+            models.append(model)
+        except Exception as e:
+            print(f"Warning: Could not load model from {path}. Skipping. Error: {e}")
+    
+    if not models:
+        print("ERROR: Failed to load any valid models.")
+        return
+        
+    logging.info(f"Loaded {len(models)} models for ensembling.")
 
-    # --- 3. Load and Preprocess Image ---
     try:
         image = cv2.imread(config['image_path'])
         image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
@@ -92,38 +97,43 @@ def predict(config):
     augmented = transforms(image=image)
     input_tensor = augmented['image'].unsqueeze(0).to(device)
 
-    # --- 4. Make Prediction ---
+    all_probabilities = []
+    first_model_tokens = None
     with torch.no_grad():
-        if 'return_tokens' in AEyeModel.forward.__code__.co_varnames:
-             output, tokens = model(input_tensor, return_tokens=True)
-        else:
-            print("WARNING: Model's forward pass does not support 'return_tokens'. Cannot generate explanation.")
-            output = model(input_tensor)
-            tokens = None
+        for i, model in enumerate(models):
+            if i == 0:
+                output, tokens = model(input_tensor, return_tokens=True)
+                first_model_tokens = tokens
+            else:
+                output = model(input_tensor, return_tokens=False)
 
-    # --- 5. Display Results ---
-    probability = torch.sigmoid(output).item()
-    prediction = "Mature" if probability >= 0.5 else "Immature"
+            probability = torch.sigmoid(output).item()
+            all_probabilities.append(probability)
+            logging.info(f"Model {i+1} prediction: {probability:.4f}")
 
-    print(f"\n--- Prediction Results for: {os.path.basename(config['image_path'])} ---")
+    final_probability = np.mean(all_probabilities)
+    prediction = "Mature" if final_probability >= 0.5 else "Immature"
+    
+    print(f"\n--- Prediction Results for {os.path.basename(config['image_path'])} ---")
     print(f"Final Classification: {prediction}")
-    print(f"Model Confidence Score: {probability:.4f} ({probability*100:.2f}%)")
-
-    if tokens is not None:
-        explanation_report = generate_explanation(tokens)
-        print(explanation_report)
+    print(f"Model Confidence Score: {final_probability:.4f} ({final_probability*100:.2f}%)")
+    
+    explanation_report = generate_explanation(first_model_tokens)
+    print(explanation_report)
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description="Run 8-Ring A-EYE model (256x256) for prediction.")
+    parser = argparse.ArgumentParser(description="Run 8-Ring A-EYE model ensemble for prediction.")
     parser.add_argument('--image_path', type=str, required=True, help='Path to the input image file.')
-    parser.add_argument('--model_path', type=str, default='saved_models/aeye_best_model.pth', help='Path to the trained 8-ring .pth model file.')
+    parser.add_argument('--model_dir', type=str, default='saved_models', help='Directory containing the trained K-Fold model files.')
     args = parser.parse_args()
 
     model_config = {
-        'dims': [16, 32, 96, 128],
-        'embed_dim': 192,
+        'dims': [32, 64, 128, 160],
+        'embed_dim': 256,
     }
-    
+
     config = {'model_config': model_config}
     config.update(vars(args))
-    predict(config)
+    
+    logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
+    predict_with_ensemble(config)
