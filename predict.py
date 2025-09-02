@@ -22,17 +22,27 @@ def get_transforms():
     ])
 
 def generate_explanation(tokens):
+    """
+    Generates a human-readable report from the 8 radial tokens,
+    correctly denormalizing values for interpretation.
+    """
     if tokens is None:
         return "Explainability report could not be generated."
         
     tokens = tokens.squeeze(0).cpu().numpy()
     
+    # Denormalize token values to revert them to the [0, 255] pixel scale
+    denormalized_tokens = np.zeros_like(tokens)
+    denormalized_tokens[:, 0:3] = (tokens[:, 0:3] * 0.5 + 0.5) * 255
+    denormalized_tokens[:, 3:6] = (tokens[:, 3:6] * 0.5) * 255
+    denormalized_tokens[:, 6:9] = (tokens[:, 6:9] * 0.5 + 0.5) * 255
+    
     explanation = "Explainability Report (Based on 8-Ring Token Analysis):\n"
     explanation += "------------------------------------------------------\n"
 
-    avg_brightness = np.mean(tokens[:, 0:3])
-    avg_variation = np.mean(tokens[:, 3:6])
-    core_brightness = np.mean(tokens[0:2, 0:3]) # Avg of first 2 rings for core
+    avg_brightness = np.mean(denormalized_tokens[:, 0:3])
+    avg_variation = np.mean(denormalized_tokens[:, 3:6])
+    core_brightness = np.mean(denormalized_tokens[0:2, 0:3]) # Avg of first 2 rings for core
 
     coverage_proxy = min(100.0, (avg_brightness / 160.0) * 100)
     variation_based_opacity = (avg_variation / 50.0) * 100
@@ -45,14 +55,13 @@ def generate_explanation(tokens):
     explanation += f"Estimated Opacity (Proxy): {opacity_proxy:.1f}%\n"
     explanation += "Ring Zone Analysis:\n"
     
-    # Hard-coded for 8 rings, grouped into two zones
     zone_definitions = {
         "Core & Inner Zone (Rings 1-4)": (0, 4), 
         "Outer & Peripheral Zone (Rings 5-8)": (4, 8)
     }
 
     for zone_name, (start, end) in zone_definitions.items():
-        zone_tokens = tokens[start:end]
+        zone_tokens = denormalized_tokens[start:end]
         mean_brightness = zone_tokens[:, 0:3].mean()
         std_dev = zone_tokens[:, 3:6].mean()
         explanation += f"  - {zone_name}:\n"
@@ -62,7 +71,6 @@ def generate_explanation(tokens):
     return explanation
 
 def predict_with_ensemble(config):
-    # ... (This function is identical to your latest 4-ring version)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
     model_paths = glob.glob(os.path.join(config['model_dir'], 'aeye_best_model_fold_*.pth'))
