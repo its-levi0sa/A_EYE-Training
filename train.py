@@ -22,7 +22,7 @@ from model.aeye_model import AEyeModel
 
 def seed_everything(seed=42):
     """
-    Sets the seed for reproducibility.
+    Sets a "light" seed for mostly-reproducible, fast training.
     """
     random.seed(seed)
     os.environ['PYTHONHASHSEED'] = str(seed)
@@ -30,8 +30,10 @@ def seed_everything(seed=42):
     torch.manual_seed(seed)
     torch.cuda.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
-    torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False
+    
+    # --- Allow non-deterministic algorithms for speed ---
+    torch.backends.cudnn.deterministic = False
+    torch.backends.cudnn.benchmark = True
 
 class FocalLoss(nn.Module):
     def __init__(self, alpha=0.25, gamma=2.0, reduction='mean'):
@@ -184,8 +186,8 @@ def main(config):
         train_labels, val_labels = labels[train_idx], labels[val_idx]
         train_dataset = AlbumentationsDataset(train_paths, train_labels, transform=get_transforms(is_train=True))
         val_dataset = AlbumentationsDataset(val_paths, val_labels, transform=get_transforms(is_train=False))
-        train_loader = DataLoader(train_dataset, batch_size=config['batch_size'], shuffle=True, num_workers=0)
-        val_loader = DataLoader(val_dataset, batch_size=config['batch_size'], shuffle=False, num_workers=0)
+        train_loader = DataLoader(train_dataset, batch_size=config['batch_size'], shuffle=True, num_workers=2)
+        val_loader = DataLoader(val_dataset, batch_size=config['batch_size'], shuffle=False, num_workers=2)
         fold_f1 = train_one_fold(fold, train_loader, val_loader, config)
         fold_scores.append(fold_f1)
 
