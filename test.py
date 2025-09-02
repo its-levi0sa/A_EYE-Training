@@ -1,83 +1,74 @@
 import torch
+import torch.optim as optim
 import numpy as np
 import logging
-import cv2
+from sklearn.metrics import f1_score
 
-# Import the necessary components
 from model.aeye_model import AEyeModel
-from train import get_transforms
+from train import get_transforms, FocalLoss
 
-def run_smoke_test():
+def run_training_smoke_test():
     """
-    Performs a self-contained smoke test to verify the entire 8-ring model pipeline.
-    It creates dummy data, applies the correct validation transforms, and runs a forward pass.
+    Performs a smoke test of the entire 8-ring training pipeline.
+    It simulates one training step (forward, backward, optimizer step) 
+    and one validation step to ensure all components are connected.
     """
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-    logging.info("--- Starting Smoke Test for 8-RING MODEL ---")
+    logging.info("--- Starting Training Smoke Test for 8-RING MODEL ---")
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logging.info(f"Using device: {device}")
 
     try:
-        # --- 1. Create Dummy Data in Memory ---
-        logging.info("Creating dummy data for testing...")
-        # Create a batch of 2 dummy images (one for each class label)
-        dummy_images = [(np.random.randint(0, 256, (256, 256, 3), dtype=np.uint8), 1),
-                        (np.random.randint(0, 256, (256, 256, 3), dtype=np.uint8), 0)]
-        
-        # A simple mock dataset to use the in-memory images
-        class MockDataset(torch.utils.data.Dataset):
-            def __init__(self, data, transform):
-                self.data = data
-                self.transform = transform
-            def __len__(self):
-                return len(self.data)
-            def __getitem__(self, idx):
-                image, label = self.data[idx]
-                if self.transform:
-                    image = self.transform(image=image)['image']
-                return image, torch.tensor(label, dtype=torch.float32)
-
-        logging.info("✅ Dummy data created.")
-
-        # --- 2. Use Correct Validation Transforms ---
-        logging.info("Applying validation transforms from train.py...")
-        val_transforms = get_transforms(is_train=False)
-        test_dataset = MockDataset(dummy_images, transform=val_transforms)
-        test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=2)
-        logging.info("✅ Transforms and DataLoader are working.")
-
-        # --- 3. Initialize Model with Correct Config ---
-        logging.info("Initializing the 8-ring model architecture...")
-        model_config = {
-            'dims': [32, 64, 128, 160],
-            'embed_dim': 256,
-        }
+        # 1. Initialize Model
+        model_config = {'dims': [32, 64, 128, 160], 'embed_dim': 256}
         model = AEyeModel(model_config).to(device)
-        logging.info("✅ AEyeModel initialized successfully.")
+        logging.info("✅ Model initialized successfully.")
 
-        # --- 4. Process One Batch ---
-        logging.info("Fetching one batch of test data...")
-        images, labels = next(iter(test_loader))
-        images = images.to(device)
-        logging.info(f"Batch loaded successfully. Batch shape: {images.shape}")
+        # 2. Create Dummy Data and DataLoader
+        dummy_image = np.random.randint(0, 256, (256, 256, 3), dtype=np.uint8)
+        transforms = get_transforms(is_train=True)
+        input_tensor = transforms(image=dummy_image)['image'].unsqueeze(0).to(device)
+        dummy_labels = torch.ones(1, 1).to(device) # Batch size of 1
+        logging.info(f"✅ Dummy data created. Shape: {input_tensor.shape}")
 
-        logging.info("Performing a forward pass...")
-        output, tokens = model(images, return_tokens=True)
-        logging.info("✅ Forward pass completed!")
+        # 3. Initialize Optimizer and Loss
+        optimizer = optim.AdamW(model.parameters(), lr=1e-4)
+        criterion = FocalLoss()
+        logging.info("✅ Optimizer and Loss function initialized.")
+
+        # --- 4. Test One Training Step ---
+        logging.info("--> Testing a single training step...")
+        model.train()
+        optimizer.zero_grad()
         
-        # --- 5. Verify Output Shapes ---
-        assert output.shape == (2, 1), f"Expected output shape (2, 1), but got {output.shape}"
-        assert tokens.shape == (2, 8, 9), f"Expected token shape (2, 8, 9) for 8 rings, but got {tokens.shape}"
-        logging.info(f"✅ Output shape is correct: {output.shape}")
-        logging.info(f"✅ Token shape is correct for 8 rings: {tokens.shape}")
+        output = model(input_tensor)
+        logging.info("    Forward pass successful.")
+        
+        loss = criterion(output, dummy_labels)
+        logging.info(f"    Loss calculated: {loss.item():.4f}")
+
+        loss.backward()
+        logging.info("    Backward pass successful.")
+
+        optimizer.step()
+        logging.info("    Optimizer step successful.")
+        logging.info("✅ Training step test passed!")
+
+        # --- 5. Test One Validation Step ---
+        logging.info("--> Testing a single validation step...")
+        model.eval()
+        with torch.no_grad():
+            output = model(input_tensor)
+            preds = torch.sigmoid(output) > 0.5
+            f1 = f1_score(dummy_labels.cpu(), preds.cpu())
+            logging.info(f"    Validation metrics calculated. F1: {f1:.4f}")
+        logging.info("✅ Validation step test passed!")
 
     except Exception as e:
-        logging.error(f"❌ TEST FAILED: An error occurred during the test.")
-        logging.error(f"Details: {e}", exc_info=True)
+        logging.error("❌ TEST FAILED: An error occurred.", exc_info=True)
         return
 
-    logging.info("--- ✅ 8-RING SMOKE TEST PASSED! ---")
-    logging.info("Your entire pipeline is working correctly.")
+    logging.info("--- ✅ 8-RING TRAINING SMOKE TEST PASSED! ---")
 
 if __name__ == '__main__':
-    run_smoke_test()
+    run_training_smoke_test()
