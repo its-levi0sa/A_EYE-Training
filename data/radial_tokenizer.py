@@ -1,48 +1,52 @@
 import torch
 import torch.nn as nn
-import cv2
 import numpy as np
 
 class RadialTokenizer(nn.Module):
-    """
-    Custom RadialTokenizer from file, configured for 8 rings.
-    """
-    def __init__(self):
+    """An optimized, fully vectorized RadialTokenizer that runs on the GPU."""
+    def __init__(self, image_size=256, num_rings=8):
         super().__init__()
-        self.center = (128, 128)
-        self.rings = [(i * 16, (i + 1) * 16) for i in range(8)]
+        self.image_size = image_size
+        self.center = (image_size // 2, image_size // 2)
 
-    def _create_ring_mask(self, shape, center, inner_r, outer_r):
-        mask = np.zeros(shape[:2], dtype=np.uint8)
-        cv2.circle(mask, center, int(outer_r), 255, -1)
-        cv2.circle(mask, center, int(inner_r), 0, -1)
-        return mask
+        if num_rings == 4: ring_width = 32
+        elif num_rings == 8: ring_width = 16
+        elif num_rings == 16: ring_width = 8
+        else: raise ValueError("Unsupported number of rings. Must be 4, 8, or 16.")
+            
+        self.rings = [(i * ring_width, (i + 1) * ring_width) for i in range(num_rings)]
+        self.num_rings = len(self.rings)
 
-    def _extract_ring_features(self, image, mask):
-        masked = cv2.bitwise_and(image, image, mask=mask)
-        pixels = masked[mask == 255]
-        if pixels.shape[0] == 0:
-            return np.zeros(9)
-        mean = pixels.mean(axis=0)
-        std = pixels.std(axis=0)
-        median = np.median(pixels, axis=0)
-        return np.concatenate([mean, std, median])
+        y, x = torch.meshgrid(torch.arange(0, image_size), torch.arange(0, image_size), indexing='ij')
+        distance_grid = torch.sqrt((x - self.center[0])**2 + (y - self.center[1])**2)
+        
+        ring_masks = []
+        for r_inner, r_outer in self.rings:
+            mask = (distance_grid >= r_inner) & (distance_grid < r_outer)
+            ring_masks.append(mask)
+            
+        self.register_buffer('ring_masks', torch.stack(ring_masks, dim=0).float())
 
-    def forward(self, image_tensor):
-        B = image_tensor.shape[0]
+    def forward(self, image_tensor: torch.Tensor) -> torch.Tensor:
+        B, C, H, W = image_tensor.shape
         device = image_tensor.device
-        tokens_9d_list = []
-        for img in image_tensor:
-            img_np = img.permute(1, 2, 0).cpu().numpy()
-            img_np = (img_np * 0.5) + 0.5
-            img_np = (img_np * 255.0).astype(np.uint8)
+        masks = self.ring_masks.to(device)
+        
+        masked_pixels = masks.unsqueeze(0).unsqueeze(2) * image_tensor.unsqueeze(1)
+        
+        num_pixels_per_ring = masks.sum(dim=[1, 2]) + 1e-6
 
-            ring_features = []
-            for r0, r1 in self.rings:
-                mask = self._create_ring_mask(img_np.shape, self.center, r0, r1)
-                ring_feat = self._extract_ring_features(img_np, mask)
-                ring_features.append(ring_feat)
-            tokens_9d_list.append(ring_features)
+        sum_vals = masked_pixels.sum(dim=[3, 4])
+        mean_vals = sum_vals / num_pixels_per_ring.view(1, self.num_rings, 1)
 
-        tokens_9d = torch.from_numpy(np.array(tokens_9d_list)).to(device=device, dtype=torch.float32)
-        return tokens_9d
+        sum_sq_vals = (masked_pixels**2).sum(dim=[3, 4])
+        mean_sq_vals = sum_sq_vals / num_pixels_per_ring.view(1, self.num_rings, 1)
+        std_vals = torch.sqrt(torch.clamp(mean_sq_vals - mean_vals**2, min=0))
+
+        flat_pixels = masked_pixels.view(B, self.num_rings, C, -1)
+        flat_pixels[flat_pixels == 0] = float('nan')
+        median_vals = torch.nanmedian(flat_pixels, dim=3).values
+
+        tokens = torch.cat([mean_vals, std_vals, median_vals], dim=2)
+        
+        return tokens.to(device=device, dtype=torch.float32)
