@@ -8,17 +8,19 @@ class AEyeModel(nn.Module):
         super().__init__()
         dims = config['dims']
         embed_dim = config['embed_dim']
-        self.tokenizer = RadialTokenizer()
+        
+        self.tokenizer = RadialTokenizer(num_rings=4)
+        self.num_rings = self.tokenizer.num_rings
+
         self.stage1 = conv_3x3_bn(3, dims[0], stride=2)
         self.stage2 = MV2Block(dims[0], dims[1], stride=2)
-        self.stage3 = ModifiedMobileViT(in_channels=dims[1], embed_dim=embed_dim)
+        self.stage3 = ModifiedMobileViT(in_channels=dims[1], embed_dim=embed_dim, num_rings=self.num_rings)
         self.stage4 = MV2Block(dims[1], dims[2], stride=2)
-        self.stage5 = ModifiedMobileViT(in_channels=dims[2], embed_dim=embed_dim)
+        self.stage5 = ModifiedMobileViT(in_channels=dims[2], embed_dim=embed_dim, num_rings=self.num_rings)
         self.stage6 = MV2Block(dims[2], dims[3], stride=2)
-        self.stage7 = ModifiedMobileViT(in_channels=dims[3], embed_dim=embed_dim)
+        self.stage7 = ModifiedMobileViT(in_channels=dims[3], embed_dim=embed_dim, num_rings=self.num_rings)
         self.pool = nn.AdaptiveAvgPool2d((1, 1))
         
-        # --- ENHANCEMENT: More Robust Classification Head ---
         self.fc = nn.Sequential(
             nn.Linear(dims[3], dims[3] // 2),
             nn.ReLU(),
@@ -40,5 +42,4 @@ class AEyeModel(nn.Module):
 
         if return_tokens:
             return output, tokens
-
         return output
