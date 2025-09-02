@@ -8,19 +8,12 @@ import glob
 import albumentations as A
 from albumentations.pytorch import ToTensorV2
 import logging
-
-# Suppress warnings for a cleaner output
 import warnings
 warnings.filterwarnings("ignore")
 
-# Import the primary model
 from model.aeye_model import AEyeModel
 
 def get_transforms():
-    """
-    Defines the transformations for a single prediction image.
-    MUST match the validation transforms from the training script.
-    """
     return A.Compose([
         A.Resize(256, 256),
         A.CLAHE(clip_limit=4.0, tile_grid_size=(8, 8), p=1.0),
@@ -30,21 +23,26 @@ def get_transforms():
 
 def generate_explanation(tokens):
     """
-    Generates a human-readable report from the 4 radial tokens with cleaner formatting.
+    Generates a human-readable report from the 4 radial tokens,
+    correctly denormalizing values for interpretation.
     """
     if tokens is None:
         return "Explainability report could not be generated."
         
     tokens = tokens.squeeze(0).cpu().numpy()
     
-    # --- Start building the report string with cleaner indentation ---
-    explanation = "Explainability Report (Based on Radial Token Analysis):\n"
+    # Denormalize token values to revert them to the [0, 255] pixel scale
+    denormalized_tokens = np.zeros_like(tokens)
+    denormalized_tokens[:, 0:3] = (tokens[:, 0:3] * 0.5 + 0.5) * 255
+    denormalized_tokens[:, 3:6] = (tokens[:, 3:6] * 0.5) * 255
+    denormalized_tokens[:, 6:9] = (tokens[:, 6:9] * 0.5 + 0.5) * 255
+
+    explanation = "Explainability Report (Based on 4-Ring Token Analysis):\n"
     explanation += "------------------------------------------------------\n"
 
-    # --- Heuristic-Based Overall Assessment ---
-    avg_brightness = np.mean(tokens[:, 0:3])
-    avg_variation = np.mean(tokens[:, 3:6])
-    core_brightness = np.mean(tokens[0, 0:3])
+    avg_brightness = np.mean(denormalized_tokens[:, 0:3])
+    avg_variation = np.mean(denormalized_tokens[:, 3:6])
+    core_brightness = np.mean(denormalized_tokens[0, 0:3]) # Core is the first ring
 
     coverage_proxy = min(100.0, (avg_brightness / 160.0) * 100)
     variation_based_opacity = (avg_variation / 50.0) * 100
@@ -57,13 +55,11 @@ def generate_explanation(tokens):
     explanation += f"Estimated Opacity (Proxy): {opacity_proxy:.1f}%\n"
     explanation += "Ring Zone Analysis:\n"
     
-    # --- Detailed Ring-by-Ring Analysis ---
-    ring_definitions = ["Core Zone", "Inner Zone", "Outer Zone", "Peripheral Zone"]
+    ring_definitions = ["Core Zone (Ring 1)", "Inner Zone (Ring 2)", "Outer Zone (Ring 3)", "Peripheral Zone (Ring 4)"]
     for i, ring_name in enumerate(ring_definitions):
-        ring_token = tokens[i]
+        ring_token = denormalized_tokens[i]
         mean_brightness = ring_token[0:3].mean()
         std_dev = ring_token[3:6].mean()
-        # Using a single level of indentation for sub-points
         explanation += f"  - {ring_name}:\n"
         explanation += f"    - Avg. Brightness: {mean_brightness:.2f}\n"
         explanation += f"    - Avg. Color Variation: {std_dev:.2f}\n"
@@ -71,14 +67,11 @@ def generate_explanation(tokens):
     return explanation
 
 def predict_with_ensemble(config):
-    """
-    Loads all K-Fold models, runs prediction with each, and averages the results.
-    """
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
     model_paths = glob.glob(os.path.join(config['model_dir'], 'aeye_best_model_fold_*.pth'))
     if not model_paths:
-        print(f"ERROR: No models found in '{config['model_dir']}'. Please check the path.")
+        print(f"ERROR: No models found in '{config['model_dir']}'.")
         return
 
     models = []
@@ -134,7 +127,7 @@ def predict_with_ensemble(config):
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description="Run A-EYE model ensemble for prediction.")
+    parser = argparse.ArgumentParser(description="Run 4-Ring A-EYE model ensemble for prediction.")
     parser.add_argument('--image_path', type=str, required=True, help='Path to the input image file.')
     parser.add_argument('--model_dir', type=str, default='saved_models', help='Directory containing the trained K-Fold model files.')
     args = parser.parse_args()
