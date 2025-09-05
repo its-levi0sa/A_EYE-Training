@@ -1,5 +1,4 @@
 import torch
-import torch.nn as nn
 import cv2
 import argparse
 import numpy as np
@@ -9,11 +8,16 @@ import albumentations as A
 from albumentations.pytorch import ToTensorV2
 import logging
 import warnings
-warnings.filterwarnings("ignore")
-
 from model.aeye_model import AEyeModel
 
+# Suppress warnings for a cleaner output
+warnings.filterwarnings("ignore")
+
+# --- CONFIGURATION ---
+MIN_MODELS_FOR_ENSEMBLE = 3
+
 def get_transforms():
+    """Returns the same validation transforms used during training."""
     return A.Compose([
         A.Resize(256, 256),
         A.CLAHE(clip_limit=4.0, tile_grid_size=(8, 8), p=1.0),
@@ -21,28 +25,35 @@ def get_transforms():
         ToTensorV2(),
     ])
 
-def generate_explanation(tokens):
+def generate_explanation(tokens_tensor, num_rings):
     """
-    Generates a human-readable report from the 8 radial tokens,
-    correctly denormalizing values for interpretation.
+    Generates a more reliable and reasonable human-readable report by averaging tokens
+    from all models and dynamically adapting to the number of rings.
     """
-    if tokens is None:
-        return "Explainability report could not be generated."
-        
-    tokens = tokens.squeeze(0).cpu().numpy()
-    
-    # Denormalize token values to revert them to the [0, 255] pixel scale
-    denormalized_tokens = np.zeros_like(tokens)
-    denormalized_tokens[:, 0:3] = (tokens[:, 0:3] * 0.5 + 0.5) * 255
-    denormalized_tokens[:, 3:6] = (tokens[:, 3:6] * 0.5) * 255
-    denormalized_tokens[:, 6:9] = (tokens[:, 6:9] * 0.5 + 0.5) * 255
-    
-    explanation = "Explainability Report (Based on 8-Ring Token Analysis):\n"
-    explanation += "------------------------------------------------------\n"
+    if tokens_tensor is None or tokens_tensor.numel() == 0:
+        return "Explainability report could not be generated (no token data)."
 
+    # Average the tokens across the ensemble dimension and convert to numpy
+    avg_tokens = tokens_tensor.mean(dim=0).squeeze(0).cpu().numpy()
+
+    # --- Denormalize token values to revert them to the [0, 255] pixel scale ---
+    denormalized_tokens = np.zeros_like(avg_tokens)
+    denormalized_tokens[:, 0:3] = (avg_tokens[:, 0:3] * 0.5 + 0.5) * 255
+    denormalized_tokens[:, 3:6] = (avg_tokens[:, 3:6] * 0.5) * 255
+    denormalized_tokens[:, 6:9] = (avg_tokens[:, 6:9] * 0.5 + 0.5) * 255
+
+    explanation = "\n--- Heuristic Explainability Report ---\n"
+    explanation += f"(Based on {num_rings}-Ring Token Analysis from Ensemble Average)\n"
+    explanation += "------------------------------------------------------\n"
+    explanation += "DISCLAIMER: This is a heuristic interpretation of the model's internal data, not a clinical diagnosis.\n\n"
+
+    # --- Heuristic Calculations ---
     avg_brightness = np.mean(denormalized_tokens[:, 0:3])
     avg_variation = np.mean(denormalized_tokens[:, 3:6])
-    core_brightness = np.mean(denormalized_tokens[0:2, 0:3]) # Avg of first 2 rings for core
+    
+    # Define core zone based on number of rings
+    core_ring_count = max(1, num_rings // 4)
+    core_brightness = np.mean(denormalized_tokens[0:core_ring_count, 0:3])
 
     coverage_proxy = min(100.0, (avg_brightness / 160.0) * 100)
     variation_based_opacity = (avg_variation / 50.0) * 100
@@ -52,13 +63,16 @@ def generate_explanation(tokens):
     opacity_proxy = min(100.0, variation_based_opacity + brightness_bonus)
 
     explanation += f"Estimated Pupillary Coverage (Proxy): {coverage_proxy:.1f}%\n"
-    explanation += f"Estimated Opacity (Proxy): {opacity_proxy:.1f}%\n"
-    explanation += "Ring Zone Analysis:\n"
+    explanation += f"Estimated Opacity (Proxy): {opacity_proxy:.1f}%\n\n"
+    explanation += "Zonal Analysis:\n"
     
-    zone_definitions = {
-        "Core & Inner Zone (Rings 1-4)": (0, 4), 
-        "Outer & Peripheral Zone (Rings 5-8)": (4, 8)
-    }
+    # --- Dynamic Zone Definitions ---
+    if num_rings == 4:
+        zone_definitions = {"Core (Ring 1)": (0,1), "Inner (Ring 2)": (1,2), "Outer (Ring 3)": (2,3), "Peripheral (Ring 4)": (3,4)}
+    elif num_rings == 8:
+        zone_definitions = {"Core/Inner (Rings 1-4)": (0, 4), "Outer/Peripheral (Rings 5-8)": (4, 8)}
+    else:
+        zone_definitions = {"Core (Rings 1-4)": (0, 4), "Inner (Rings 5-8)": (4, 8), "Outer (Rings 9-12)": (8, 12), "Peripheral (Rings 13-16)": (12, 16)}
 
     for zone_name, (start, end) in zone_definitions.items():
         zone_tokens = denormalized_tokens[start:end]
@@ -75,62 +89,65 @@ def predict_with_ensemble(config):
     
     model_paths = glob.glob(os.path.join(config['model_dir'], 'aeye_best_model_fold_*.pth'))
     if not model_paths:
-        print(f"ERROR: No models found in '{config['model_dir']}'.")
+        logging.error(f"No models found in '{config['model_dir']}'. Please check the directory path.")
         return
 
     models = []
+    num_rings = None
     for path in model_paths:
-        model = AEyeModel(config['model_config']).to(device)
         try:
+            model = AEyeModel(config['model_config']).to(device)
             model.load_state_dict(torch.load(path, map_location=device))
             model.eval()
             models.append(model)
+
+            if num_rings is None:
+                num_rings = model.num_rings
         except Exception as e:
-            print(f"Warning: Could not load model from {path}. Skipping. Error: {e}")
+            logging.warning(f"Could not load model from {path}. Skipping. Error: {e}")
     
-    if not models:
-        print("ERROR: Failed to load any valid models.")
-        return
-        
+    if len(models) < MIN_MODELS_FOR_ENSEMBLE:
+        logging.warning(f"Only {len(models)} model(s) loaded. An ensemble prediction requires at least {MIN_MODELS_FOR_ENSEMBLE} for reliability.")
+        if not models: return
+
     logging.info(f"Loaded {len(models)} models for ensembling.")
 
     try:
         image = cv2.imread(config['image_path'])
+        if image is None: raise FileNotFoundError("Image not found or could not be read.")
         image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
     except Exception as e:
-        print(f"ERROR loading image: {e}")
+        logging.error(f"Failed to load image at '{config['image_path']}'. Error: {e}")
         return
 
     transforms = get_transforms()
-    augmented = transforms(image=image)
-    input_tensor = augmented['image'].unsqueeze(0).to(device)
+    input_tensor = transforms(image=image)['image'].unsqueeze(0).to(device)
 
     all_probabilities = []
-    first_model_tokens = None
+    all_tokens = []
     with torch.no_grad():
         for i, model in enumerate(models):
-            if i == 0:
-                output, tokens = model(input_tensor, return_tokens=True)
-                first_model_tokens = tokens
-            else:
-                output = model(input_tensor, return_tokens=False)
+            output, tokens = model(input_tensor, return_tokens=True)
+            all_probabilities.append(torch.sigmoid(output).item())
+            all_tokens.append(tokens)
 
-            probability = torch.sigmoid(output).item()
-            all_probabilities.append(probability)
-            logging.info(f"Model {i+1} prediction: {probability:.4f}")
-
+    # --- Final Prediction ---
     final_probability = np.mean(all_probabilities)
     prediction = "Mature" if final_probability >= 0.5 else "Immature"
     
-    print(f"\n--- Prediction Results for {os.path.basename(config['image_path'])} ---")
+    print(f"\n--- Ensemble Prediction for {os.path.basename(config['image_path'])} ---")
     print(f"Final Classification: {prediction}")
-    print(f"Model Confidence Score: {final_probability:.4f} ({final_probability*100:.2f}%)")
+    print(f"Confidence Score: {final_probability:.4f} ({final_probability*100:.2f}%)")
     
-    explanation_report = generate_explanation(first_model_tokens)
-    print(explanation_report)
+    # --- Generate Explanation ---
+    if all_tokens:
+        # Stack tokens for averaging: [num_models, B, num_rings, token_dim]
+        stacked_tokens = torch.stack(all_tokens, dim=0)
+        explanation_report = generate_explanation(stacked_tokens, num_rings)
+        print(explanation_report)
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description="Run 8-Ring A-EYE model ensemble for prediction.")
+    parser = argparse.ArgumentParser(description="Run A-EYE model ensemble for prediction on a single image.")
     parser.add_argument('--image_path', type=str, required=True, help='Path to the input image file.')
     parser.add_argument('--model_dir', type=str, default='saved_models', help='Directory containing the trained K-Fold model files.')
     args = parser.parse_args()
