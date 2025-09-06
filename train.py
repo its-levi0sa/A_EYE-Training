@@ -14,7 +14,6 @@ import cv2
 import albumentations as A
 from albumentations.pytorch import ToTensorV2
 import numpy as np
-from collections import deque
 import warnings
 warnings.filterwarnings("ignore")
 
@@ -31,7 +30,7 @@ def seed_everything(seed=42):
     torch.cuda.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
     
-    # --- Allow non-deterministic algorithms for speed ---
+    # --- Non-deterministic algorithms for speed ---
     torch.backends.cudnn.deterministic = False
     torch.backends.cudnn.benchmark = True
 
@@ -53,17 +52,21 @@ class FocalLoss(nn.Module):
         else: return focal_loss
 
 def get_transforms(is_train=True):
+    """
+    Defines the image transformations for training and validation.
+    """
     if is_train:
+        # --- Augmentation ---
         return A.Compose([
             A.Resize(256, 256),
             A.CLAHE(clip_limit=4.0, tile_grid_size=(8, 8), p=1.0),
             A.HorizontalFlip(p=0.5),
-            A.RandomBrightnessContrast(brightness_limit=0.3, contrast_limit=0.3, p=0.75),
-            A.ShiftScaleRotate(shift_limit=0.1, scale_limit=0.15, rotate_limit=30, p=0.75),
+            A.RandomBrightnessContrast(brightness_limit=0.2, contrast_limit=0.2, p=0.75),
+            A.ShiftScaleRotate(shift_limit=0.08, scale_limit=0.12, rotate_limit=25, p=0.75),
             A.Blur(blur_limit=3, p=0.2),
             A.GridDistortion(p=0.2),
             A.OpticalDistortion(distort_limit=0.2, shift_limit=0.2, p=0.2),
-            A.CoarseDropout(max_holes=8, max_height=32, max_width=32, p=0.5),
+            A.Cutout(num_holes=8, max_h_size=32, max_w_size=32, fill_value=0, p=0.5),
             A.Normalize(mean=(0.5, 0.5, 0.5), std=(0.5, 0.5, 0.5)),
             ToTensorV2(),
         ])
@@ -98,11 +101,21 @@ def train_one_fold(fold, train_loader, val_loader, config):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = AEyeModel(config['model_config']).to(device)
     optimizer = optim.AdamW(model.parameters(), lr=config['learning_rate'], weight_decay=config['weight_decay'])
-    criterion = FocalLoss()
-    scheduler = torch.optim.lr_scheduler.OneCycleLR(optimizer, max_lr=config['learning_rate'], steps_per_epoch=len(train_loader), epochs=config['epochs'])
+    
+    # --- Tuned Focal Loss ---
+    criterion = FocalLoss(alpha=0.25, gamma=2.5)
+    
+    # --- LR Scheduler ---
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
+        optimizer, 
+        T_0=len(train_loader) * 10,
+        T_mult=1,
+        eta_min=1e-6
+    )
+
     scaler = torch.cuda.amp.GradScaler()
     best_val_f1 = 0.0
-    patience = 15
+    patience = 20
     epochs_no_improve = 0
 
     logging.info(f"--- Starting Fold {fold+1} ---")
@@ -158,7 +171,6 @@ def train_one_fold(fold, train_loader, val_loader, config):
     return best_val_f1
 
 def main(config):
-    # --- ADD SEEDING HERE ---
     seed_everything(seed=42)
 
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -200,14 +212,13 @@ def main(config):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Train A-EYE Cataract Classification Model")
-    parser.add_argument('--epochs', type=int, default=100, help='Number of training epochs')
-    parser.add_argument('--batch_size', type=int, default=32, help='Batch size for training')
-    parser.add_argument('--learning_rate', type=float, default=1e-4, help='Max learning rate for OneCycleLR')
+    parser.add_argument('--epochs', type=int, default=150, help='Number of training epochs')
+    parser.add_argument('--batch_size', type=int, default=16, help='Batch size for training')
+    parser.add_argument('--learning_rate', type=float, default=2e-4, help='Max learning rate for CosineAnnealingWarmRestarts')
     parser.add_argument('--weight_decay', type=float, default=1e-2, help='Weight decay for AdamW')
     parser.add_argument('--save_dir', type=str, default='saved_models', help='Directory to save models')
     args = parser.parse_args()
 
-    # Model configuration for the 16-RING MODEL
     model_config = {
         'dims': [32, 64, 128, 160],
         'embed_dim': 256,
