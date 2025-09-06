@@ -10,11 +10,11 @@ import logging
 import warnings
 from model.aeye_model import AEyeModel
 
-# Suppress warnings for a cleaner output
 warnings.filterwarnings("ignore")
 
 # --- CONFIGURATION ---
 MIN_MODELS_FOR_ENSEMBLE = 3
+MATURE_COVERAGE_THRESHOLD = 80.0
 
 def get_transforms():
     """Returns the same validation transforms used during training."""
@@ -27,13 +27,11 @@ def get_transforms():
 
 def generate_explanation(tokens_tensor, num_rings):
     """
-    Generates a more reliable and reasonable human-readable report by averaging tokens
-    from all models and dynamically adapting to the number of rings.
+    Generates a human-readable report and returns the key heuristic values.
     """
     if tokens_tensor is None or tokens_tensor.numel() == 0:
-        return "Explainability report could not be generated (no token data)."
+        return "Explainability report could not be generated (no token data).", {}
 
-    # Average the tokens across the ensemble dimension and convert to numpy
     avg_tokens = tokens_tensor.mean(dim=0).squeeze(0).cpu().numpy()
 
     # --- Denormalize token values to revert them to the [0, 255] pixel scale ---
@@ -51,7 +49,6 @@ def generate_explanation(tokens_tensor, num_rings):
     avg_brightness = np.mean(denormalized_tokens[:, 0:3])
     avg_variation = np.mean(denormalized_tokens[:, 3:6])
     
-    # Define core zone based on number of rings
     core_ring_count = max(1, num_rings // 4)
     core_brightness = np.mean(denormalized_tokens[0:core_ring_count, 0:3])
 
@@ -82,7 +79,11 @@ def generate_explanation(tokens_tensor, num_rings):
         explanation += f"    - Avg. Brightness: {mean_brightness:.2f}\n"
         explanation += f"    - Avg. Color Variation: {std_dev:.2f}\n"
         
-    return explanation
+    heuristic_values = {
+        "coverage_proxy": coverage_proxy,
+        "opacity_proxy": opacity_proxy,
+    }
+    return explanation, heuristic_values
 
 def predict_with_ensemble(config):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -123,28 +124,29 @@ def predict_with_ensemble(config):
     transforms = get_transforms()
     input_tensor = transforms(image=image)['image'].unsqueeze(0).to(device)
 
-    all_probabilities = []
     all_tokens = []
     with torch.no_grad():
-        for i, model in enumerate(models):
-            output, tokens = model(input_tensor, return_tokens=True)
-            all_probabilities.append(torch.sigmoid(output).item())
+        for model in models:
+            _, tokens = model(input_tensor, return_tokens=True)
             all_tokens.append(tokens)
 
-    # --- Final Prediction ---
-    final_probability = np.mean(all_probabilities)
-    prediction = "Mature" if final_probability >= 0.5 else "Immature"
-    
-    print(f"\n--- Ensemble Prediction for {os.path.basename(config['image_path'])} ---")
-    print(f"Final Classification: {prediction}")
-    print(f"Confidence Score: {final_probability:.4f} ({final_probability*100:.2f}%)")
-    
-    # --- Generate Explanation ---
+    # --- RULE-BASED PREDICTION LOGIC ---
     if all_tokens:
-        # Stack tokens for averaging: [num_models, B, num_rings, token_dim]
         stacked_tokens = torch.stack(all_tokens, dim=0)
-        explanation_report = generate_explanation(stacked_tokens, num_rings)
+        explanation_report, heuristic_values = generate_explanation(stacked_tokens, num_rings)
+        
+        pupillary_coverage = heuristic_values.get("coverage_proxy", 0.0)
+
+        prediction = "Mature" if pupillary_coverage >= MATURE_COVERAGE_THRESHOLD else "Immature"
+        
+        confidence_score = pupillary_coverage / 100.0
+        
+        print(f"\n--- Ensemble Prediction for {os.path.basename(config['image_path'])} ---")
+        print(f"Final Classification: {prediction}")
+        print(f"Confidence (based on Pupillary Coverage): {confidence_score:.4f} ({pupillary_coverage:.2f}%)")
         print(explanation_report)
+    else:
+        print("Could not generate a prediction as no token data was returned by the models.")
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Run A-EYE model ensemble for prediction on a single image.")
