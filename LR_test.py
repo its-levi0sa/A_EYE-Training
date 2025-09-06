@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader, Dataset
-from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
+from sklearn.metrics import f1_score
 from sklearn.model_selection import StratifiedKFold
 import os
 import argparse
@@ -144,7 +144,6 @@ def test_one_lr(train_loader, val_loader, config, learning_rate):
 
 def main(config):
     seed_everything(seed=42)
-    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
     data_dir = 'data/train'
     class_map = {'immature': 0, 'mature': 1}
 
@@ -171,7 +170,8 @@ def main(config):
     train_loader = DataLoader(train_dataset, batch_size=config['batch_size'], shuffle=True, num_workers=2)
     val_loader = DataLoader(val_dataset, batch_size=config['batch_size'], shuffle=False, num_workers=2)
     
-    lr_candidates = [2e-5, 5e-5, 1e-4, 2e-4, 5e-4]
+    # --- UPDATED: Narrowed down list of learning rates ---
+    lr_candidates = [2e-4, 5e-4]
     lr_scores = {}
 
     for lr in lr_candidates:
@@ -185,7 +185,7 @@ def main(config):
     logging.info(f"Best Learning Rate Found: {best_lr}")
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description="Find Best LR for 8-Ring A-EYE Model")
+    parser = argparse.ArgumentParser(description="Find Best LR for A-EYE Model")
     parser.add_argument('--epochs', type=int, default=100, help='Max epochs for LR testing')
     parser.add_argument('--batch_size', type=int, default=32, help='Batch size')
     parser.add_argument('--weight_decay', type=float, default=1e-2, help='Weight decay')
